@@ -2,7 +2,7 @@
   "name": "datasource-switcher",
   "version": "0.1.0",
   "bin": {
-    "datasource-switcher": "bin/datasource-switcher.js"
+    "datasource-switcher": "bin/stack.js"
   },
   "scripts": {
     "build": "tsc",
@@ -14,6 +14,7 @@
     "@types/jest": "^27.5.2",
     "@types/node": "10.17.27",
     "@types/prettier": "2.6.0",
+    "esbuild": "^0.15.2",
     "jest": "^27.5.1",
     "ts-jest": "^27.1.4",
     "aws-cdk": "2.37.1",
