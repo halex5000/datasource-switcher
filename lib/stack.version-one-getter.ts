@@ -23,7 +23,7 @@ const handler = async (event: GetterEvent) => {
           pk: "v1-calls",
           sk: 'total'
         },
-        UpdateExpression: "SET calls = calls + :num",
+        UpdateExpression: "ADD calls :num",
         ExpressionAttributeValues: {
           ":num": 1,
         },
