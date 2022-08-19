@@ -36,22 +36,24 @@ const handler = async ({ userId }: WorkerEvent) => {
       apiTarget: dataSourceConfig.apiVersion,
     };
 
-    const baseURL = dataSourceConfig.versionTwoEnabled ? apiVersionTwoUrl : apiVersionOneUrl;
+    const baseURL = dataSourceConfig.versionTwoEnabled
+      ? apiVersionTwoUrl
+      : apiVersionOneUrl;
 
-    const { data, status} = await axios({
+    const { data, status } = await axios({
       baseURL,
-      url: '/items',
+      url: "/items",
       headers: {
         "x-api-key": process.env.API_KEY || "",
       },
-      method: 'GET'
+      method: "GET",
     });
 
-    console.log('response', {
+    console.log("response", {
       data,
-      status
-    })
-  } catch (err) {
+      status,
+    });
+  } catch {
     response = {
       initialization: "failed",
     };

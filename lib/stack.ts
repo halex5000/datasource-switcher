@@ -10,15 +10,18 @@ import {
   BillingMode,
   TableEncryption,
   StreamViewType,
-  TableClass,
 } from "aws-cdk-lib/aws-dynamodb";
 import { RemovalPolicy } from "aws-cdk-lib";
 import { config } from "dotenv";
 import { ApiKeySourceType, UsagePlan } from "aws-cdk-lib/aws-apigateway";
+import { WebSocketApi, WebSocketStage } from "@aws-cdk/aws-apigatewayv2-alpha";
+import { WebSocketLambdaIntegration } from "@aws-cdk/aws-apigatewayv2-integrations-alpha";
+import { PolicyStatement } from "aws-cdk-lib/aws-iam";
+import { DynamoEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
 
 export class Stack extends cdk.Stack {
-  constructor(scope: Construct, id: string, props?: cdk.StackProps) {
-    super(scope, id, props);
+  constructor(scope: Construct, id: string, properties?: cdk.StackProps) {
+    super(scope, id, properties);
 
     config();
 
@@ -27,24 +30,13 @@ export class Stack extends cdk.Stack {
         name: "pk",
         type: AttributeType.STRING,
       },
-      sortKey: {
-        name: "sk",
-        type: AttributeType.STRING,
-      },
       billingMode: BillingMode.PAY_PER_REQUEST,
       removalPolicy: RemovalPolicy.DESTROY,
       encryption: TableEncryption.AWS_MANAGED,
-      stream: StreamViewType.KEYS_ONLY,
+      stream: StreamViewType.NEW_AND_OLD_IMAGES,
     });
 
-    const getterRole = new iam.Role(this, "getter-function-role", {
-      assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
-    });
-
-    table.grantReadWriteData(getterRole);
-
-    const versionOneGetter = new NodejsFunction(this, "version-one-getter", {
-      role: getterRole,
+    const streamHandler = new NodejsFunction(this, "stream-handler", {
       memorySize: 2048,
       timeout: cdk.Duration.seconds(10),
       runtime: lambda.Runtime.NODEJS_16_X,
@@ -56,8 +48,32 @@ export class Stack extends cdk.Stack {
       },
     });
 
+    streamHandler.addEventSource(
+      new DynamoEventSource(table, {
+        startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+        batchSize: 5,
+        bisectBatchOnError: true,
+        retryAttempts: 10,
+      })
+    );
+
+    table.grantReadWriteData(streamHandler);
+
+    const versionOneGetter = new NodejsFunction(this, "version-one-getter", {
+      memorySize: 2048,
+      timeout: cdk.Duration.seconds(10),
+      runtime: lambda.Runtime.NODEJS_16_X,
+      description:
+        "The V1 getter which is the worker behind the V1 API Gateway",
+      environment: {
+        LAUNCHDARKLY_CLIENT_ID: process.env.LAUNCHDARKLY_CLIENT_ID || "",
+        TABLE_NAME: table.tableName,
+      },
+    });
+
+    table.grantReadWriteData(versionOneGetter);
+
     const versionTwoGetter = new NodejsFunction(this, "version-two-getter", {
-      role: getterRole,
       memorySize: 2048,
       timeout: cdk.Duration.seconds(10),
       runtime: lambda.Runtime.NODEJS_16_X,
@@ -68,6 +84,8 @@ export class Stack extends cdk.Stack {
         TABLE_NAME: table.tableName,
       },
     });
+
+    table.grantReadWriteData(versionOneGetter);
 
     const apiV1 = new apigateway.LambdaRestApi(this, "getter-v1-api", {
       handler: versionOneGetter,
@@ -82,12 +100,7 @@ export class Stack extends cdk.Stack {
       proxy: false,
     });
 
-    const workerRole = new iam.Role(this, "worker-function-role", {
-      assumedBy: new iam.ServicePrincipal("lambda.amazonaws.com"),
-    });
-
     const worker = new NodejsFunction(this, "worker", {
-      role: workerRole,
       memorySize: 2048,
       timeout: cdk.Duration.seconds(10),
       runtime: lambda.Runtime.NODEJS_16_X,
@@ -123,9 +136,9 @@ export class Stack extends cdk.Stack {
       value: process.env.API_KEY || "",
       resources: [apiV1, apiV2],
     });
-    apiKey.grantRead(workerRole);
+    apiKey.grantRead(worker);
 
-    workerRole.addToPolicy(
+    worker.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["execute-api:Invoke"],
         effect: iam.Effect.ALLOW,
@@ -133,7 +146,7 @@ export class Stack extends cdk.Stack {
       })
     );
 
-    workerRole.addToPolicy(
+    worker.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["execute-api:Invoke"],
         effect: iam.Effect.ALLOW,
@@ -155,5 +168,88 @@ export class Stack extends cdk.Stack {
       description: "default usage plan for items APIs",
     });
     plan.addApiKey(apiKey);
+
+    const connectHandler = new NodejsFunction(this, "connect-handler", {
+      memorySize: 2048,
+      timeout: cdk.Duration.seconds(10),
+      runtime: lambda.Runtime.NODEJS_16_X,
+      entry: "./lib/connect-handler/index.ts",
+      description: "The connect handler for the web socket API",
+      environment: {
+        LAUNCHDARKLY_CLIENT_ID: process.env.LAUNCHDARKLY_CLIENT_ID || "",
+        TABLE_NAME: table.tableName,
+      },
+    });
+
+    const disconnectHandler = new NodejsFunction(this, "disconnect-handler", {
+      memorySize: 2048,
+      timeout: cdk.Duration.seconds(10),
+      runtime: lambda.Runtime.NODEJS_16_X,
+      description: "The disconnect handler for the web socket API",
+      environment: {
+        LAUNCHDARKLY_CLIENT_ID: process.env.LAUNCHDARKLY_CLIENT_ID || "",
+        TABLE_NAME: table.tableName,
+      },
+    });
+
+    const publishCallsUpdater = new NodejsFunction(
+      this,
+      "publish-calls-handler",
+      {
+        memorySize: 2048,
+        timeout: cdk.Duration.seconds(10),
+        runtime: lambda.Runtime.NODEJS_16_X,
+        description: "The connect handler for the web socket API",
+        environment: {
+          LAUNCHDARKLY_CLIENT_ID: process.env.LAUNCHDARKLY_CLIENT_ID || "",
+          TABLE_NAME: table.tableName,
+        },
+      }
+    );
+
+    table.grantReadWriteData(connectHandler);
+    table.grantReadWriteData(disconnectHandler);
+    table.grantReadData(publishCallsUpdater);
+
+    const webSocketApi = new WebSocketApi(this, "web-sockets-api", {
+      connectRouteOptions: {
+        integration: new WebSocketLambdaIntegration(
+          "ConnectIntegration",
+          connectHandler
+        ),
+      },
+      disconnectRouteOptions: {
+        integration: new WebSocketLambdaIntegration(
+          "DisconnectIntegration",
+          disconnectHandler
+        ),
+      },
+    });
+
+    webSocketApi.addRoute("publishCalls", {
+      integration: new WebSocketLambdaIntegration(
+        "publish-calls",
+        publishCallsUpdater
+      ),
+    });
+
+    const apiStage = new WebSocketStage(this, "web-sockets-stage", {
+      webSocketApi,
+      stageName: "dev",
+      autoDeploy: true,
+    });
+
+    const connectionsArns = this.formatArn({
+      service: "execute-api",
+      resourceName: `${apiStage.stageName}/POST/*`,
+      resource: webSocketApi.apiId,
+    });
+
+    publishCallsUpdater.addToRolePolicy(
+      new PolicyStatement({
+        actions: ["execute-api:ManageConnections"],
+        resources: [connectionsArns],
+      })
+    );
   }
 }
