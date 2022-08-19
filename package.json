@@ -35,22 +35,13 @@
     "typescript": "~3.9.7"
   },
   "dependencies": {
-    "@aws-cdk/aws-apigatewayv2-integrations-alpha": "^2.37.1-alpha.0",
-    "aws-cdk-lib": "2.37.1",
-    "constructs": "^10.0.0",
+    "@aws-cdk/aws-apigatewayv2-integrations-alpha": "2.38.1-alpha.0",
+    "aws-cdk-lib": "2.38.1",
+    "constructs": "^10.1.80",
     "dotenv": "^16.0.1",
     "launchdarkly-node-server-sdk": "^6.4.2",
     "source-map-support": "^0.5.21"
   },
-  "workspaces": [
-    "lib/connect-handler",
-    "lib/disconnect-handler",
-    "lib/publish-calls-handler",
-    "lib/stream-handler",
-    "lib/version-one-getter",
-    "lib/version-two-getter",
-    "lib/worker"
-  ],
   "lint-staged": {
     "**/*.ts": "eslint --fix"
   }
