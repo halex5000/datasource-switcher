@@ -18,15 +18,14 @@ const handler = async (event: APIGatewayProxyEvent) => {
       new UpdateCommand({
         TableName: process.env.TABLE_NAME || "",
         Key: {
-          pk: `connection-${event.requestContext.connectionId}`,
+          pk: `connections`,
+          sk: 1,
         },
-        UpdateExpression:
-          "SET active = :status, connectionId = :connectionId, connectTime = :connectTime",
+        UpdateExpression: "ADD ids :id",
         ExpressionAttributeValues: {
-          ":status": true,
-          ":connectionId": event.requestContext.connectionId,
-          ":connectTime": event.requestContext.connectedAt,
+          ":id": new Set([event.requestContext.connectionId]),
         },
+        ReturnValues: "ALL_NEW",
       })
     );
   } catch (error) {

@@ -1,10 +1,6 @@
 import { init } from "launchdarkly-node-server-sdk";
 import { DynamoDBClient } from "@aws-sdk/client-dynamodb";
-import {
-  DeleteCommand,
-  DynamoDBDocumentClient,
-  UpdateCommand,
-} from "@aws-sdk/lib-dynamodb";
+import { DynamoDBDocumentClient, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { APIGatewayProxyEvent } from "aws-lambda";
 const dynamoClient = new DynamoDBClient({ region: process.env.AWS_REGION });
 const documentClient = DynamoDBDocumentClient.from(dynamoClient);
@@ -19,11 +15,17 @@ const handler = async (event: APIGatewayProxyEvent) => {
     body.initialization = "success";
 
     await documentClient.send(
-      new DeleteCommand({
+      new UpdateCommand({
         TableName: process.env.TABLE_NAME || "",
         Key: {
-          pk: `connection-${event.requestContext.connectionId}`,
+          pk: `connections`,
+          sk: 1,
         },
+        UpdateExpression: "DELETE ids :id",
+        ExpressionAttributeValues: {
+          ":id": new Set([event.requestContext.connectionId]),
+        },
+        ReturnValues: "ALL_NEW",
       })
     );
   } catch (error) {

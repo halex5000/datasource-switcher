@@ -1,7 +1,6 @@
 import * as cdk from "aws-cdk-lib";
 import { Construct } from "constructs";
 import * as lambda from "aws-cdk-lib/aws-lambda";
-import * as iam from "aws-cdk-lib/aws-iam";
 import * as apigateway from "aws-cdk-lib/aws-apigateway";
 import { NodejsFunction } from "aws-cdk-lib/aws-lambda-nodejs";
 import {
@@ -25,10 +24,21 @@ export class Stack extends cdk.Stack {
 
     config();
 
+    const runtime = lambda.Runtime.NODEJS_16_X;
+    const timeout = cdk.Duration.seconds(10);
+    const memorySize = 2048;
+    const environment: any = {
+      LAUNCHDARKLY_CLIENT_ID: process.env.LAUNCHDARKLY_CLIENT_ID || "",
+    };
+
     const table = new Table(this, "getter-observer-table", {
       partitionKey: {
         name: "pk",
         type: AttributeType.STRING,
+      },
+      sortKey: {
+        name: "sk",
+        type: AttributeType.NUMBER,
       },
       billingMode: BillingMode.PAY_PER_REQUEST,
       removalPolicy: RemovalPolicy.DESTROY,
@@ -36,56 +46,56 @@ export class Stack extends cdk.Stack {
       stream: StreamViewType.NEW_AND_OLD_IMAGES,
     });
 
-    const streamHandler = new NodejsFunction(this, "stream-handler", {
-      memorySize: 2048,
-      timeout: cdk.Duration.seconds(10),
-      runtime: lambda.Runtime.NODEJS_16_X,
-      description:
-        "The V1 getter which is the worker behind the V1 API Gateway",
-      environment: {
-        LAUNCHDARKLY_CLIENT_ID: process.env.LAUNCHDARKLY_CLIENT_ID || "",
-        TABLE_NAME: table.tableName,
-      },
-    });
+    environment.TABLE_NAME = table.tableName;
 
-    streamHandler.addEventSource(
+    const callCountUpdateHandler = new NodejsFunction(
+      this,
+      "call-count-update-handler",
+      {
+        memorySize,
+        timeout,
+        runtime,
+        description:
+          "The V1 getter which is the worker behind the V1 API Gateway",
+        environment,
+        entry: "./lib/call-count-update-handler/index.ts",
+      }
+    );
+
+    callCountUpdateHandler.addEventSource(
       new DynamoEventSource(table, {
         startingPosition: lambda.StartingPosition.TRIM_HORIZON,
-        batchSize: 5,
+        batchSize: 1000,
         bisectBatchOnError: true,
         retryAttempts: 10,
       })
     );
 
-    table.grantReadWriteData(streamHandler);
+    table.grantReadWriteData(callCountUpdateHandler);
 
     const versionOneGetter = new NodejsFunction(this, "version-one-getter", {
-      memorySize: 2048,
-      timeout: cdk.Duration.seconds(10),
-      runtime: lambda.Runtime.NODEJS_16_X,
+      memorySize,
+      timeout,
+      runtime,
       description:
         "The V1 getter which is the worker behind the V1 API Gateway",
-      environment: {
-        LAUNCHDARKLY_CLIENT_ID: process.env.LAUNCHDARKLY_CLIENT_ID || "",
-        TABLE_NAME: table.tableName,
-      },
+      environment,
+      entry: "./lib/version-one-getter/index.ts",
     });
 
     table.grantReadWriteData(versionOneGetter);
 
     const versionTwoGetter = new NodejsFunction(this, "version-two-getter", {
-      memorySize: 2048,
-      timeout: cdk.Duration.seconds(10),
-      runtime: lambda.Runtime.NODEJS_16_X,
+      memorySize,
+      timeout,
+      runtime,
       description:
         "The V2 getter which is the worker behind the V2 API Gateway",
-      environment: {
-        LAUNCHDARKLY_CLIENT_ID: process.env.LAUNCHDARKLY_CLIENT_ID || "",
-        TABLE_NAME: table.tableName,
-      },
+      environment,
+      entry: "./lib/version-two-getter/index.ts",
     });
 
-    table.grantReadWriteData(versionOneGetter);
+    table.grantReadWriteData(versionTwoGetter);
 
     const apiV1 = new apigateway.LambdaRestApi(this, "getter-v1-api", {
       handler: versionOneGetter,
@@ -101,17 +111,18 @@ export class Stack extends cdk.Stack {
     });
 
     const worker = new NodejsFunction(this, "worker", {
-      memorySize: 2048,
-      timeout: cdk.Duration.seconds(10),
-      runtime: lambda.Runtime.NODEJS_16_X,
+      memorySize,
+      timeout,
+      runtime,
       description:
         "The worker which will use flags to determine which API to use in the DataSourceSwitcher",
       environment: {
-        LAUNCHDARKLY_CLIENT_ID: process.env.LAUNCHDARKLY_CLIENT_ID || "",
+        ...environment,
         VERSION_1_API_URL: apiV1.url,
         VERSION_2_API_URL: apiV2.url,
         API_KEY: process.env.API_KEY || "",
       },
+      entry: "./lib/worker/index.ts",
     });
 
     const versionOneItems = apiV1.root.addResource("items");
@@ -138,22 +149,6 @@ export class Stack extends cdk.Stack {
     });
     apiKey.grantRead(worker);
 
-    worker.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ["execute-api:Invoke"],
-        effect: iam.Effect.ALLOW,
-        resources: [getVersionOneItems.methodArn],
-      })
-    );
-
-    worker.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ["execute-api:Invoke"],
-        effect: iam.Effect.ALLOW,
-        resources: [getVersionTwoItems.methodArn],
-      })
-    );
-
     const plan = new UsagePlan(this, "default-usage-plan", {
       apiStages: [
         {
@@ -170,46 +165,25 @@ export class Stack extends cdk.Stack {
     plan.addApiKey(apiKey);
 
     const connectHandler = new NodejsFunction(this, "connect-handler", {
-      memorySize: 2048,
-      timeout: cdk.Duration.seconds(10),
-      runtime: lambda.Runtime.NODEJS_16_X,
+      memorySize,
+      timeout,
+      runtime,
       entry: "./lib/connect-handler/index.ts",
       description: "The connect handler for the web socket API",
-      environment: {
-        LAUNCHDARKLY_CLIENT_ID: process.env.LAUNCHDARKLY_CLIENT_ID || "",
-        TABLE_NAME: table.tableName,
-      },
+      environment,
     });
 
     const disconnectHandler = new NodejsFunction(this, "disconnect-handler", {
-      memorySize: 2048,
-      timeout: cdk.Duration.seconds(10),
-      runtime: lambda.Runtime.NODEJS_16_X,
+      memorySize,
+      timeout,
+      runtime,
+      entry: "./lib/disconnect-handler/index.ts",
       description: "The disconnect handler for the web socket API",
-      environment: {
-        LAUNCHDARKLY_CLIENT_ID: process.env.LAUNCHDARKLY_CLIENT_ID || "",
-        TABLE_NAME: table.tableName,
-      },
+      environment,
     });
-
-    const publishCallsUpdater = new NodejsFunction(
-      this,
-      "publish-calls-handler",
-      {
-        memorySize: 2048,
-        timeout: cdk.Duration.seconds(10),
-        runtime: lambda.Runtime.NODEJS_16_X,
-        description: "The connect handler for the web socket API",
-        environment: {
-          LAUNCHDARKLY_CLIENT_ID: process.env.LAUNCHDARKLY_CLIENT_ID || "",
-          TABLE_NAME: table.tableName,
-        },
-      }
-    );
 
     table.grantReadWriteData(connectHandler);
     table.grantReadWriteData(disconnectHandler);
-    table.grantReadData(publishCallsUpdater);
 
     const webSocketApi = new WebSocketApi(this, "web-sockets-api", {
       connectRouteOptions: {
@@ -226,29 +200,54 @@ export class Stack extends cdk.Stack {
       },
     });
 
-    webSocketApi.addRoute("publishCalls", {
-      integration: new WebSocketLambdaIntegration(
-        "publish-calls",
-        publishCallsUpdater
-      ),
-    });
-
     const apiStage = new WebSocketStage(this, "web-sockets-stage", {
       webSocketApi,
       stageName: "dev",
       autoDeploy: true,
     });
 
-    const connectionsArns = this.formatArn({
+    const postConnection = this.formatArn({
       service: "execute-api",
-      resourceName: `${apiStage.stageName}/POST/*`,
+      resourceName: `${apiStage.stageName}/POST/@connections/*`,
       resource: webSocketApi.apiId,
     });
 
-    publishCallsUpdater.addToRolePolicy(
+    const getConnections = this.formatArn({
+      service: "execute-api",
+      resourceName: `${apiStage.stageName}/GET/@connections/*`,
+      resource: webSocketApi.apiId,
+    });
+
+    const aggregateUpdateHandler = new NodejsFunction(
+      this,
+      "aggregate-update-handler",
+      {
+        memorySize,
+        timeout,
+        runtime,
+        entry: "./lib/aggregate-update-handler/index.ts",
+        description: "Handler for updates to the aggregate counts",
+        environment: {
+          ...environment,
+          WEBSOCKET_URL: apiStage.callbackUrl,
+        },
+      }
+    );
+    table.grantReadData(aggregateUpdateHandler);
+
+    aggregateUpdateHandler.addToRolePolicy(
       new PolicyStatement({
         actions: ["execute-api:ManageConnections"],
-        resources: [connectionsArns],
+        resources: [postConnection, getConnections],
+      })
+    );
+
+    aggregateUpdateHandler.addEventSource(
+      new DynamoEventSource(table, {
+        startingPosition: lambda.StartingPosition.TRIM_HORIZON,
+        batchSize: 1000,
+        bisectBatchOnError: true,
+        retryAttempts: 10,
       })
     );
   }
