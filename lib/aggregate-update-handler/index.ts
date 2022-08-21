@@ -50,13 +50,15 @@ const handler = async (event: DynamoDBStreamEvent) => {
           };
 
           if (pk === "aggregate-count") {
-            // get the connected ids
             const results = await documentClient.send(
               new GetItemCommand({
                 TableName: process.env.TABLE_NAME || "",
                 Key: {
                   pk: {
                     S: "connections",
+                  },
+                  sk: {
+                    N: "1",
                   },
                 },
                 ProjectionExpression: "ids",
@@ -91,7 +93,14 @@ const handler = async (event: DynamoDBStreamEvent) => {
                 const commands = postCommands.map((command) =>
                   apiClient.send(command)
                 );
-                await Promise.all(commands);
+                const results = await Promise.allSettled(commands);
+
+                for (const result of results) {
+                  if (result.status === "rejected") {
+                    //stale connection id to clean up
+                    // probably batch and send to SNS to cleanup
+                  }
+                }
               }
             }
           }

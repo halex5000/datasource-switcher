@@ -24,7 +24,10 @@ const handler = async (event: APIGatewayProxyEvent) => {
           pk: "v2-calls",
           sk: Date.now(),
         },
-        UpdateExpression: "SET count 1",
+        UpdateExpression: "SET callCount = :count",
+        ExpressionAttributeValues: {
+          ":count": 1,
+        },
       })
     );
   } catch (error) {

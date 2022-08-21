@@ -1,9 +1,6 @@
 import { init } from "launchdarkly-node-server-sdk";
 import axios from "axios";
-
-type WorkerEvent = {
-  userId: string;
-};
+import { nanoid } from "nanoid";
 
 type DataSourceConfig = {
   apiVersion: string;
@@ -19,22 +16,25 @@ const defaultConfig: DataSourceConfig = {
   versionTwoEnabled: false,
 };
 
-const handler = async ({ userId }: WorkerEvent) => {
-  let response: any;
+const handler = async (event: any) => {
+  let apiVersion = defaultConfig.apiVersion;
+  let versionTwoEnabled = defaultConfig.versionTwoEnabled;
+
+  console.log(event);
+
   try {
     const client = init(clientId);
     await client.waitForInitialization();
     const dataSourceConfig: DataSourceConfig = await client.variation(
       "data-source-controller",
       {
-        key: userId,
+        key: nanoid(),
       },
       defaultConfig
     );
-    response = {
-      initialization: "successful",
-      apiTarget: dataSourceConfig.apiVersion,
-    };
+
+    apiVersion = dataSourceConfig.apiVersion;
+    versionTwoEnabled = dataSourceConfig.versionTwoEnabled;
 
     const baseURL = dataSourceConfig.versionTwoEnabled
       ? apiVersionTwoUrl
@@ -53,12 +53,13 @@ const handler = async ({ userId }: WorkerEvent) => {
       data,
       status,
     });
-  } catch {
-    response = {
-      initialization: "failed",
-    };
+  } catch (error: any) {
+    console.error("error", error);
   }
-  return JSON.stringify({ statusCode: 200, body: response });
+  return {
+    apiVersion,
+    versionTwoEnabled,
+  };
 };
 
 export { handler };

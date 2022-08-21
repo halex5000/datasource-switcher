@@ -10,13 +10,26 @@ import {
   TableEncryption,
   StreamViewType,
 } from "aws-cdk-lib/aws-dynamodb";
-import { RemovalPolicy } from "aws-cdk-lib";
+import { Duration, RemovalPolicy } from "aws-cdk-lib";
 import { config } from "dotenv";
+import * as tasks from "aws-cdk-lib/aws-stepfunctions-tasks";
 import { ApiKeySourceType, UsagePlan } from "aws-cdk-lib/aws-apigateway";
 import { WebSocketApi, WebSocketStage } from "@aws-cdk/aws-apigatewayv2-alpha";
 import { WebSocketLambdaIntegration } from "@aws-cdk/aws-apigatewayv2-integrations-alpha";
 import { PolicyStatement } from "aws-cdk-lib/aws-iam";
 import { DynamoEventSource } from "aws-cdk-lib/aws-lambda-event-sources";
+import {
+  Parallel,
+  Wait,
+  WaitTime,
+  IChainable,
+  StateMachine,
+  Choice,
+  Condition,
+  Succeed,
+  InputType,
+} from "aws-cdk-lib/aws-stepfunctions";
+import { TestRunnerMachine } from "./test-runner-machine";
 
 export class Stack extends cdk.Stack {
   constructor(scope: Construct, id: string, properties?: cdk.StackProps) {
@@ -68,6 +81,7 @@ export class Stack extends cdk.Stack {
         batchSize: 1000,
         bisectBatchOnError: true,
         retryAttempts: 10,
+        maxBatchingWindow: Duration.seconds(5),
       })
     );
 
@@ -110,21 +124,6 @@ export class Stack extends cdk.Stack {
       proxy: false,
     });
 
-    const worker = new NodejsFunction(this, "worker", {
-      memorySize,
-      timeout,
-      runtime,
-      description:
-        "The worker which will use flags to determine which API to use in the DataSourceSwitcher",
-      environment: {
-        ...environment,
-        VERSION_1_API_URL: apiV1.url,
-        VERSION_2_API_URL: apiV2.url,
-        API_KEY: process.env.API_KEY || "",
-      },
-      entry: "./lib/worker/index.ts",
-    });
-
     const versionOneItems = apiV1.root.addResource("items");
     const getVersionOneItems = versionOneItems.addMethod(
       "GET",
@@ -147,7 +146,6 @@ export class Stack extends cdk.Stack {
       value: process.env.API_KEY || "",
       resources: [apiV1, apiV2],
     });
-    apiKey.grantRead(worker);
 
     const plan = new UsagePlan(this, "default-usage-plan", {
       apiStages: [
@@ -248,7 +246,97 @@ export class Stack extends cdk.Stack {
         batchSize: 1000,
         bisectBatchOnError: true,
         retryAttempts: 10,
+        maxBatchingWindow: Duration.seconds(5),
       })
     );
+
+    const runner = new TestRunnerMachine(this, "test-runner-machine", {
+      apiV1,
+      apiV2,
+      environment,
+      table,
+    });
+
+    const parallelTask = new Parallel(this, "test-parallelizer", {
+      comment: "parallelizing the test runs",
+    });
+
+    const waitTask = new Wait(this, "wait-a-second", {
+      time: WaitTime.duration(Duration.seconds(5)),
+    });
+
+    const branches: IChainable[] = [];
+    for (let index = 0; index < 20; index++) {
+      branches.push(
+        new tasks.StepFunctionsStartExecution(
+          this,
+          `test-runner-executor-${index}`,
+          {
+            stateMachine: runner.stateMachine,
+            associateWithParent: true,
+            comment: "branch invokation of test runner from distributor",
+            input: {
+              type: InputType.OBJECT,
+              value: {
+                userId: [1, 3, 5].includes(index) ? "beta-user" : undefined,
+              },
+            },
+          }
+        )
+      );
+    }
+    parallelTask.branch(...branches);
+
+    const distributorDefinition = parallelTask.next(waitTask);
+
+    const distributor = new StateMachine(this, "load-test-distributor", {
+      definition: distributorDefinition,
+      timeout: Duration.seconds(30),
+    });
+
+    const loadTestChecker = new NodejsFunction(this, "load-test-checker", {
+      memorySize,
+      timeout,
+      runtime,
+      entry: "./lib/check-test-enabled/index.ts",
+      description: "Checks the flag for running the load test",
+      environment: {
+        ...environment,
+      },
+    });
+    table.grantReadWriteData(loadTestChecker);
+
+    const loadTestCheckerTask = new tasks.LambdaInvoke(
+      this,
+      "load-test-check-invoke",
+      {
+        lambdaFunction: loadTestChecker,
+        comment: `task to check if it's okay to run the load test`,
+        outputPath: "$.Payload",
+      }
+    );
+
+    const next = new tasks.StepFunctionsStartExecution(
+      this,
+      "test-distributor-executor",
+      {
+        stateMachine: runner.stateMachine,
+        associateWithParent: true,
+        comment: "when test run is enabled, executes distributor",
+      }
+    );
+
+    const testEnabledChoice = new Choice(this, "load-test-enabled-choice")
+      .when(Condition.booleanEquals("$.loadTestEnabled", true), next)
+      .otherwise(
+        new Succeed(this, "successful-test-execution", {
+          comment:
+            "Success is reached when the test execution is no longer within the parameters",
+        })
+      );
+
+    const manager = new StateMachine(this, "load-test-manager", {
+      definition: loadTestCheckerTask.next(testEnabledChoice),
+    });
   }
 }

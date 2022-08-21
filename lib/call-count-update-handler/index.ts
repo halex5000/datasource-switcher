@@ -1,10 +1,6 @@
 import { init } from "launchdarkly-node-server-sdk";
 import { DynamoDBStreamEvent } from "aws-lambda";
-import {
-  AttributeValue,
-  DynamoDBClient,
-  GetItemCommand,
-} from "@aws-sdk/client-dynamodb";
+import { AttributeValue, DynamoDBClient } from "@aws-sdk/client-dynamodb";
 import { DynamoDBDocumentClient, UpdateCommand } from "@aws-sdk/lib-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 const dynamoClient = new DynamoDBClient({ region: process.env.AWS_REGION });
@@ -31,19 +27,19 @@ const handler = async (event: DynamoDBStreamEvent) => {
       )) {
         const newImage = record.dynamodb?.NewImage;
         if (newImage) {
-          const { count, pk } = unmarshall(
+          const { callCount, pk } = unmarshall(
             newImage as Record<string, AttributeValue>
           ) as {
-            count: number;
+            callCount: number;
             pk: "v1-calls" | "v2-calls";
           };
 
-          if (count) {
+          if (callCount) {
             if (pk === "v1-calls") {
-              versionOneCallCount = count;
+              versionOneCallCount += callCount;
             }
             if (pk === "v2-calls") {
-              versionTwoCallCount = count;
+              versionTwoCallCount += callCount;
             }
           }
         }
