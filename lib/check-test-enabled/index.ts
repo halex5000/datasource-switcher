@@ -30,9 +30,16 @@ const getTestParameters = async () => {
       endTime: number;
     };
   } else {
+    const testDuration: number = await client.variation(
+      "load-test-duration",
+      {
+        key: "1234567",
+      },
+      5
+    );
     const now = new Date();
     const startTime = Date.parse(now.toString());
-    const soon = new Date(now.setMinutes(now.getMinutes() + 5));
+    const soon = new Date(now.setMinutes(now.getMinutes() + testDuration));
     const endTime = Date.parse(soon.toString());
 
     await documentClient.send(

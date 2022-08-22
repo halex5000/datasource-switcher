@@ -26,7 +26,13 @@ const users = [
   "mads",
   "alea",
   "peter",
+  "ravi",
 ];
+
+function randomIntFromInterval(min: number, max: number) {
+  // min and max included
+  return Math.floor(Math.random() * (max - min + 1) + min);
+}
 
 const handler = async (event: any) => {
   let apiVersion = defaultConfig.apiVersion;
@@ -34,13 +40,14 @@ const handler = async (event: any) => {
   try {
     const client = init(clientId);
     await client.waitForInitialization();
-    const random = Math.floor(Math.random() * users.length);
-    console.log(random, users[random]);
-    const user = users[random];
+    const randomInt = randomIntFromInterval(1, 10);
+
+    const userId = randomInt === 5 ? users[0] : nanoid();
+
     const dataSourceConfig: DataSourceConfig = await client.variation(
       "data-source-controller",
       {
-        key: nanoid(),
+        key: userId,
       },
       defaultConfig
     );
@@ -54,7 +61,7 @@ const handler = async (event: any) => {
 
     const { data, status } = await axios({
       baseURL,
-      url: `/items?userId=${user}`,
+      url: `/items?userId=${userId}`,
       headers: {
         "x-api-key": process.env.API_KEY || "",
       },
