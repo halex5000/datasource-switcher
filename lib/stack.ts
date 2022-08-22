@@ -28,6 +28,7 @@ import {
   Condition,
   Succeed,
   InputType,
+  Map,
 } from "aws-cdk-lib/aws-stepfunctions";
 import { TestRunnerMachine } from "./test-runner-machine";
 
@@ -274,7 +275,7 @@ export class Stack extends cdk.Stack {
           {
             stateMachine: runner.stateMachine,
             associateWithParent: true,
-            comment: "branch invokation of test runner from distributor",
+            comment: "branch invocation of test runner from distributor",
             input: {
               type: InputType.OBJECT,
               value: {
@@ -316,7 +317,7 @@ export class Stack extends cdk.Stack {
       }
     );
 
-    const next = new tasks.StepFunctionsStartExecution(
+    const executeDistributor = new tasks.StepFunctionsStartExecution(
       this,
       "test-distributor-executor",
       {
@@ -326,8 +327,13 @@ export class Stack extends cdk.Stack {
       }
     );
 
+    executeDistributor.next(loadTestCheckerTask);
+
     const testEnabledChoice = new Choice(this, "load-test-enabled-choice")
-      .when(Condition.booleanEquals("$.loadTestEnabled", true), next)
+      .when(
+        Condition.booleanEquals("$.loadTestEnabled", true),
+        executeDistributor
+      )
       .otherwise(
         new Succeed(this, "successful-test-execution", {
           comment:

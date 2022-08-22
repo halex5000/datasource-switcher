@@ -13,6 +13,8 @@ const handler = async (event: APIGatewayProxyEvent) => {
 
   const body: any = {};
 
+  console.log(event);
+
   try {
     await client.waitForInitialization();
     body.initialization = "success";
@@ -24,9 +26,10 @@ const handler = async (event: APIGatewayProxyEvent) => {
           pk: "v2-calls",
           sk: Date.now(),
         },
-        UpdateExpression: "SET callCount = :count",
+        UpdateExpression: "SET callCount = :count, userId = :userId",
         ExpressionAttributeValues: {
           ":count": 1,
+          ":userId": event.queryStringParameters.userId,
         },
       })
     );

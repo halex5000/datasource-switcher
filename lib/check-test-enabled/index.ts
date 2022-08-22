@@ -8,14 +8,6 @@ const config = { region: process.env.AWS_REGION };
 const dynamoClient = new DynamoDBClient(config);
 const documentClient = DynamoDBDocumentClient.from(dynamoClient);
 
-type DataSourceConfig = {
-  loadTestEnabled: boolean;
-};
-
-const defaultConfig: DataSourceConfig = {
-  loadTestEnabled: false,
-};
-
 const getTestParameters = async () => {
   const result = await documentClient.send(
     new GetItemCommand({
@@ -68,26 +60,24 @@ const getTestParameters = async () => {
 export const handler = async (event: any) => {
   console.log(event);
 
-  let dataSourceConfig: DataSourceConfig = defaultConfig;
-
   let loadTestEnabled = false;
 
   try {
     await client.waitForInitialization();
 
-    dataSourceConfig = await client.variation(
-      "data-source-controller",
+    loadTestEnabled = await client.variation(
+      "load-test-controller",
       {
         key: "1234567",
       },
-      defaultConfig
+      false
     );
 
     const testParameters = await getTestParameters();
     const now = Date.now();
 
     console.log("evaluation parameters", {
-      loadTestEnabled: dataSourceConfig.loadTestEnabled,
+      loadTestEnabled,
       startTime: testParameters.startTime,
       endTime: testParameters.endTime,
       now,
@@ -96,7 +86,7 @@ export const handler = async (event: any) => {
     });
 
     loadTestEnabled =
-      dataSourceConfig.loadTestEnabled &&
+      loadTestEnabled &&
       testParameters.startTime < now &&
       testParameters.endTime > now;
   } catch (error: any) {

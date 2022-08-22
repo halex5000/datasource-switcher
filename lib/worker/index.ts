@@ -16,15 +16,27 @@ const defaultConfig: DataSourceConfig = {
   versionTwoEnabled: false,
 };
 
+const users = [
+  "alex",
+  "munnawar",
+  "jess",
+  "heidi",
+  "cody",
+  "ieva",
+  "mads",
+  "alea",
+  "peter",
+];
+
 const handler = async (event: any) => {
   let apiVersion = defaultConfig.apiVersion;
   let versionTwoEnabled = defaultConfig.versionTwoEnabled;
-
-  console.log(event);
-
   try {
     const client = init(clientId);
     await client.waitForInitialization();
+    const random = Math.floor(Math.random() * users.length);
+    console.log(random, users[random]);
+    const user = users[random];
     const dataSourceConfig: DataSourceConfig = await client.variation(
       "data-source-controller",
       {
@@ -42,7 +54,7 @@ const handler = async (event: any) => {
 
     const { data, status } = await axios({
       baseURL,
-      url: "/items",
+      url: `/items?userId=${user}`,
       headers: {
         "x-api-key": process.env.API_KEY || "",
       },
