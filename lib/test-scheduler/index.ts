@@ -11,7 +11,6 @@ const client = init(clientId);
 const projectKey = process.env.PROJECT_KEY;
 const featureFlagKey = process.env.FEATURE_FLAG_KEY;
 const environmentKey = process.env.ENVIRONMENT_KEY;
-const templateKey = process.env.TEMPLATE_KEY;
 const launchDarklyApiKey = process.env.API_KEY;
 
 const url = `https://app.launchdarkly.com/api/v2/projects/${projectKey}/flags/${featureFlagKey}/environments/${environmentKey}/workflows?templateKey=${templateKey}`;

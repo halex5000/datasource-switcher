@@ -28,7 +28,6 @@ import {
   Condition,
   Succeed,
   InputType,
-  Map,
 } from "aws-cdk-lib/aws-stepfunctions";
 import { TestRunnerMachine } from "./test-runner-machine";
 
@@ -62,6 +61,23 @@ export class Stack extends cdk.Stack {
 
     environment.TABLE_NAME = table.tableName;
 
+    const testScheduler = new NodejsFunction(this, "test-scheduler-handler", {
+      memorySize,
+      timeout,
+      runtime,
+      description:
+        "used for scheduling tests by creating a workflow to run to turn on the flag",
+      environment: {
+        PROJECT_KEY: process.env.LAUNCHDARKLY_CLIENT_ID || "",
+        FEATURE_FLAG_KEY: process.env.PROJECT_KEY || "",
+        ENVIRONMENT_KEY: process.env.ENVIRONMENT_KEY || "",
+        API_KEY: process.env.TEST_SCHEDULING_API_KEY || "",
+      },
+      entry: "./lib/test-scheduler/index.ts",
+    });
+
+    table.grantReadWriteData(testScheduler);
+
     const callCountUpdateHandler = new NodejsFunction(
       this,
       "call-count-update-handler",
@@ -69,8 +85,7 @@ export class Stack extends cdk.Stack {
         memorySize,
         timeout,
         runtime,
-        description:
-          "The V1 getter which is the worker behind the V1 API Gateway",
+        description: "Updates the counts as the calls aggregate",
         environment,
         entry: "./lib/call-count-update-handler/index.ts",
       }
