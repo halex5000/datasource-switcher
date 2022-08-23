@@ -57,7 +57,7 @@ const createWorkflow = (startDate: number, endDate: number) => {
 
 const scheduleNewTest = async (startDate: number, endDate: number) => {
   const startTime = formatter.format(startDate);
-  const endTime = formatter.format(startDate);
+  const endTime = formatter.format(endDate);
   await documentClient.send(
     new UpdateCommand({
       TableName: process.env.TABLE_NAME || "",
@@ -76,6 +76,12 @@ const scheduleNewTest = async (startDate: number, endDate: number) => {
       ReturnValues: "ALL_NEW",
     })
   );
+  return {
+    startTime,
+    endTime,
+    startDate,
+    endDate,
+  };
 };
 
 const scheduleWorkflowInLaunchDarkly = async (
@@ -96,11 +102,20 @@ const handler = async (event: { startDate: number; endDate: number }) => {
   try {
     await client.waitForInitialization();
     await scheduleWorkflowInLaunchDarkly(startDate, endDate);
-    await scheduleNewTest(startDate, endDate);
+    const {
+      startDate: scheduledStartDate,
+      startTime,
+      endDate: scheduledEndDate,
+      endTime,
+    } = await scheduleNewTest(startDate, endDate);
     return {
       message: "test scheduled",
       workflowScheduled: true,
       testScheduled: true,
+      scheduledStartDate,
+      scheduledEndDate,
+      startTime,
+      endTime,
     };
   } catch (error) {
     console.error("error", error);
