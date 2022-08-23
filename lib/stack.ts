@@ -27,9 +27,14 @@ import {
   Choice,
   Condition,
   Succeed,
-  InputType,
 } from "aws-cdk-lib/aws-stepfunctions";
 import { TestRunnerMachine } from "./test-runner-machine";
+import { EventBridgeDestination } from "aws-cdk-lib/aws-lambda-destinations";
+import { Rule, Schedule } from "aws-cdk-lib/aws-events";
+import {
+  SfnStateMachine,
+  LambdaFunction,
+} from "aws-cdk-lib/aws-events-targets";
 
 export class Stack extends cdk.Stack {
   constructor(scope: Construct, id: string, properties?: cdk.StackProps) {
@@ -61,22 +66,58 @@ export class Stack extends cdk.Stack {
 
     environment.TABLE_NAME = table.tableName;
 
-    const testScheduler = new NodejsFunction(this, "test-scheduler-handler", {
+    const testScheduler = new NodejsFunction(this, "test-scheduler", {
       memorySize,
       timeout,
       runtime,
       description:
         "used for scheduling tests by creating a workflow to run to turn on the flag",
       environment: {
-        PROJECT_KEY: process.env.LAUNCHDARKLY_CLIENT_ID || "",
-        FEATURE_FLAG_KEY: process.env.PROJECT_KEY || "",
+        ...environment,
+        PROJECT_KEY: process.env.PROJECT_KEY || "",
+        FEATURE_FLAG_KEY: process.env.FEATURE_FLAG_KEY || "",
         ENVIRONMENT_KEY: process.env.ENVIRONMENT_KEY || "",
         API_KEY: process.env.TEST_SCHEDULING_API_KEY || "",
       },
-      entry: "./lib/test-scheduler/index.ts",
     });
 
     table.grantReadWriteData(testScheduler);
+
+    const testRunStarter = new NodejsFunction(this, "test-run-starter", {
+      memorySize,
+      timeout,
+      runtime,
+      description:
+        "used for starting tests by emitting an event after execution to indicate a test is scheduled now",
+      environment: {
+        ...environment,
+      },
+      onSuccess: new EventBridgeDestination(),
+    });
+
+    table.grantReadData(testRunStarter);
+
+    const checkForTestRunRule = new Rule(this, "check-for-test-run", {
+      description:
+        "rule to trigger the function which checks for scheduled test runs that are pending",
+      enabled: true,
+      schedule: Schedule.rate(cdk.Duration.minutes(1)),
+    });
+
+    checkForTestRunRule.addTarget(new LambdaFunction(testRunStarter));
+
+    const startTestRunRule = new Rule(this, "start-test-run", {
+      description:
+        "rule defining when to start a test run with the test manager step function",
+      enabled: true,
+      eventPattern: {
+        detail: {
+          isTestScheduled: [true],
+          time: [{ exists: true }],
+        },
+        source: ["aws.lambda"],
+      },
+    });
 
     const callCountUpdateHandler = new NodejsFunction(
       this,
@@ -87,7 +128,6 @@ export class Stack extends cdk.Stack {
         runtime,
         description: "Updates the counts as the calls aggregate",
         environment,
-        entry: "./lib/call-count-update-handler/index.ts",
       }
     );
 
@@ -110,7 +150,6 @@ export class Stack extends cdk.Stack {
       description:
         "The V1 getter which is the worker behind the V1 API Gateway",
       environment,
-      entry: "./lib/version-one-getter/index.ts",
     });
 
     table.grantReadWriteData(versionOneGetter);
@@ -122,7 +161,6 @@ export class Stack extends cdk.Stack {
       description:
         "The V2 getter which is the worker behind the V2 API Gateway",
       environment,
-      entry: "./lib/version-two-getter/index.ts",
     });
 
     table.grantReadWriteData(versionTwoGetter);
@@ -141,7 +179,7 @@ export class Stack extends cdk.Stack {
     });
 
     const versionOneItems = apiV1.root.addResource("items");
-    const getVersionOneItems = versionOneItems.addMethod(
+    versionOneItems.addMethod(
       "GET",
       new apigateway.LambdaIntegration(versionOneGetter),
       {
@@ -150,7 +188,7 @@ export class Stack extends cdk.Stack {
     ); // GET /items
 
     const versionTwoItems = apiV2.root.addResource("items");
-    const getVersionTwoItems = versionTwoItems.addMethod(
+    versionTwoItems.addMethod(
       "GET",
       new apigateway.LambdaIntegration(versionTwoGetter),
       {
@@ -182,7 +220,6 @@ export class Stack extends cdk.Stack {
       memorySize,
       timeout,
       runtime,
-      entry: "./lib/connect-handler/index.ts",
       description: "The connect handler for the web socket API",
       environment,
     });
@@ -191,7 +228,6 @@ export class Stack extends cdk.Stack {
       memorySize,
       timeout,
       runtime,
-      entry: "./lib/disconnect-handler/index.ts",
       description: "The disconnect handler for the web socket API",
       environment,
     });
@@ -239,7 +275,6 @@ export class Stack extends cdk.Stack {
         memorySize,
         timeout,
         runtime,
-        entry: "./lib/aggregate-update-handler/index.ts",
         description: "Handler for updates to the aggregate counts",
         environment: {
           ...environment,
@@ -266,12 +301,49 @@ export class Stack extends cdk.Stack {
       })
     );
 
+    const checkTestEnabledHandler = new NodejsFunction(
+      this,
+      "check-test-enabled-handler",
+      {
+        memorySize,
+        timeout,
+        runtime,
+        description: "Checks the flag for running the load test",
+        environment: {
+          ...environment,
+        },
+      }
+    );
+    table.grantReadWriteData(checkTestEnabledHandler);
+
+    const loadTestCheckerTask = new tasks.LambdaInvoke(
+      this,
+      "load-test-check-invoke",
+      {
+        lambdaFunction: checkTestEnabledHandler,
+        comment: `task to check if it's okay to run the load test`,
+        outputPath: "$.Payload",
+      }
+    );
+
     const runner = new TestRunnerMachine(this, "test-runner-machine", {
       apiV1,
       apiV2,
       environment,
       table,
     });
+
+    const executeRunner = new tasks.StepFunctionsStartExecution(
+      this,
+      "test-runner-executor",
+      {
+        stateMachine: runner.stateMachine,
+        associateWithParent: true,
+        comment: "when test run is enabled, executes distributor",
+      }
+    );
+
+    executeRunner.next(new Succeed(this, "runner-success"));
 
     const parallelTask = new Parallel(this, "test-parallelizer", {
       comment: "parallelizing the test runs",
@@ -291,12 +363,6 @@ export class Stack extends cdk.Stack {
             stateMachine: runner.stateMachine,
             associateWithParent: true,
             comment: "branch invocation of test runner from distributor",
-            input: {
-              type: InputType.OBJECT,
-              value: {
-                userId: [1, 3, 5].includes(index) ? "beta-user" : undefined,
-              },
-            },
           }
         )
       );
@@ -310,44 +376,20 @@ export class Stack extends cdk.Stack {
       timeout: Duration.seconds(30),
     });
 
-    const loadTestChecker = new NodejsFunction(this, "load-test-checker", {
-      memorySize,
-      timeout,
-      runtime,
-      entry: "./lib/check-test-enabled/index.ts",
-      description: "Checks the flag for running the load test",
-      environment: {
-        ...environment,
-      },
-    });
-    table.grantReadWriteData(loadTestChecker);
-
-    const loadTestCheckerTask = new tasks.LambdaInvoke(
-      this,
-      "load-test-check-invoke",
-      {
-        lambdaFunction: loadTestChecker,
-        comment: `task to check if it's okay to run the load test`,
-        outputPath: "$.Payload",
-      }
-    );
-
-    const executeDistributor = new tasks.StepFunctionsStartExecution(
+    const distributorRunner = new tasks.StepFunctionsStartExecution(
       this,
       "test-distributor-executor",
       {
-        stateMachine: runner.stateMachine,
+        stateMachine: distributor,
         associateWithParent: true,
         comment: "when test run is enabled, executes distributor",
       }
     );
 
-    executeDistributor.next(loadTestCheckerTask);
-
     const testEnabledChoice = new Choice(this, "load-test-enabled-choice")
       .when(
         Condition.booleanEquals("$.loadTestEnabled", true),
-        executeDistributor
+        distributorRunner
       )
       .otherwise(
         new Succeed(this, "successful-test-execution", {
@@ -356,8 +398,10 @@ export class Stack extends cdk.Stack {
         })
       );
 
-    const manager = new StateMachine(this, "load-test-manager", {
+    const testManager = new StateMachine(this, "load-test-manager", {
       definition: loadTestCheckerTask.next(testEnabledChoice),
     });
+
+    startTestRunRule.addTarget(new SfnStateMachine(testManager));
   }
 }

@@ -50,7 +50,7 @@ export class TestRunnerMachine extends Construct {
         VERSION_2_API_URL: apiV2.url,
         API_KEY: process.env.API_KEY || "",
       },
-      entry: "./lib/worker/index.ts",
+      entry: "./lib/stack.worker.ts",
     });
 
     const workerTask = new tasks.LambdaInvoke(this, "load-test-worker", {

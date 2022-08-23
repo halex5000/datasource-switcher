@@ -15,6 +15,7 @@
     "prepare": "husky install"
   },
   "devDependencies": {
+    "@types/aws-lambda": "^8.10.102",
     "@types/jest": "^27.5.2",
     "@types/node": "10.17.27",
     "@types/prettier": "2.6.0",
@@ -36,10 +37,16 @@
   },
   "dependencies": {
     "@aws-cdk/aws-apigatewayv2-integrations-alpha": "2.38.1-alpha.0",
+    "@aws-sdk/client-apigatewaymanagementapi": "^3.154.0",
+    "@aws-sdk/client-dynamodb": "^3.154.0",
+    "@aws-sdk/lib-dynamodb": "^3.154.0",
     "aws-cdk-lib": "2.38.1",
+    "aws-lambda": "^1.0.7",
+    "axios": "^0.27.2",
     "constructs": "^10.1.80",
     "dotenv": "^16.0.1",
     "launchdarkly-node-server-sdk": "^6.4.2",
+    "nanoid": "^4.0.0",
     "source-map-support": "^0.5.21"
   },
   "lint-staged": {

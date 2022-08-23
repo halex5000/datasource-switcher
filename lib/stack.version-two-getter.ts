@@ -29,7 +29,7 @@ const handler = async (event: APIGatewayProxyEvent) => {
         UpdateExpression: "SET callCount = :count, userId = :userId",
         ExpressionAttributeValues: {
           ":count": 1,
-          ":userId": event.queryStringParameters.userId,
+          ":userId": event.queryStringParameters?.userId,
         },
       })
     );
