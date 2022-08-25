@@ -27,14 +27,10 @@ import {
   Choice,
   Condition,
   Succeed,
+  IntegrationPattern,
 } from "aws-cdk-lib/aws-stepfunctions";
 import { TestRunnerMachine } from "./test-runner-machine";
 import { EventBridgeDestination } from "aws-cdk-lib/aws-lambda-destinations";
-import { Rule, Schedule } from "aws-cdk-lib/aws-events";
-import {
-  SfnStateMachine,
-  LambdaFunction,
-} from "aws-cdk-lib/aws-events-targets";
 
 export class Stack extends cdk.Stack {
   constructor(scope: Construct, id: string, properties?: cdk.StackProps) {
@@ -75,7 +71,10 @@ export class Stack extends cdk.Stack {
       environment: {
         ...environment,
         PROJECT_KEY: process.env.PROJECT_KEY || "",
-        FEATURE_FLAG_KEY: process.env.FEATURE_FLAG_KEY || "",
+        DATASOURCE_FEATURE_FLAG_KEY:
+          process.env.DATASOURCE_FEATURE_FLAG_KEY || "",
+        LOAD_TEST_FEATURE_FLAG_KEY:
+          process.env.LOAD_TEST_FEATURE_FLAG_KEY || "",
         ENVIRONMENT_KEY: process.env.ENVIRONMENT_KEY || "",
         API_KEY: process.env.TEST_SCHEDULING_API_KEY || "",
       },
@@ -92,32 +91,9 @@ export class Stack extends cdk.Stack {
       environment: {
         ...environment,
       },
-      onSuccess: new EventBridgeDestination(),
     });
 
-    table.grantReadData(testRunStarter);
-
-    const checkForTestRunRule = new Rule(this, "check-for-test-run", {
-      description:
-        "rule to trigger the function which checks for scheduled test runs that are pending",
-      enabled: true,
-      schedule: Schedule.rate(cdk.Duration.minutes(1)),
-    });
-
-    checkForTestRunRule.addTarget(new LambdaFunction(testRunStarter));
-
-    const startTestRunRule = new Rule(this, "start-test-run", {
-      description:
-        "rule defining when to start a test run with the test manager step function",
-      enabled: true,
-      eventPattern: {
-        detail: {
-          isTestScheduled: [true],
-          time: [{ exists: true }],
-        },
-        source: ["aws.lambda"],
-      },
-    });
+    table.grantReadWriteData(testRunStarter);
 
     const callCountUpdateHandler = new NodejsFunction(
       this,
@@ -383,8 +359,11 @@ export class Stack extends cdk.Stack {
         stateMachine: distributor,
         associateWithParent: true,
         comment: "when test run is enabled, executes distributor",
+        integrationPattern: IntegrationPattern.RUN_JOB,
       }
     );
+
+    distributorRunner.next(loadTestCheckerTask);
 
     const testEnabledChoice = new Choice(this, "load-test-enabled-choice")
       .when(
@@ -401,7 +380,5 @@ export class Stack extends cdk.Stack {
     const testManager = new StateMachine(this, "load-test-manager", {
       definition: loadTestCheckerTask.next(testEnabledChoice),
     });
-
-    startTestRunRule.addTarget(new SfnStateMachine(testManager));
   }
 }

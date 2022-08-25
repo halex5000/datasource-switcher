@@ -13,6 +13,12 @@ const documentClient = DynamoDBDocumentClient.from(dynamoClient);
 const clientId = process.env.LAUNCHDARKLY_CLIENT_ID || "";
 const client = init(clientId);
 
+const formatter = new Intl.DateTimeFormat("en-US", {
+  dateStyle: "short",
+  timeStyle: "short",
+  timeZone: "America/New_York",
+});
+
 const hasScheduledTest = async (
   now: number
 ): Promise<{
@@ -21,7 +27,9 @@ const hasScheduledTest = async (
   sk?: number;
 }> => {
   console.log(
-    `querying for: tests ending after: ${now} and starting before ${now}`
+    `querying for: tests ending after: ${formatter.format(
+      now
+    )} and starting before ${formatter.format(now)}`
   );
   const result = await documentClient.send(
     new QueryCommand({
@@ -45,7 +53,7 @@ const hasScheduledTest = async (
 
   if (result.Items && result.Count) {
     console.log("query results:", result.Items);
-    const item = unmarshall(result.Items[0]) as {
+    const item = result.Items[0] as {
       startDate: number;
       endDate: number;
       pk: string;
@@ -82,13 +90,11 @@ const markTestAsRunning = async ({
       // query to confirm we have an endtime later than now
       // hence a test should be running
       Key: {
-        pk: ":pk",
-        sk: ":sk",
+        pk: pk,
+        sk: sk,
       },
       UpdateExpression: "SET #pickedUpTime = :pickedUpTime",
       ExpressionAttributeValues: {
-        ":pk": pk,
-        ":sk": sk,
         ":pickedUpTime": now,
       },
       ExpressionAttributeNames: {
@@ -108,18 +114,18 @@ const handler = async () => {
     const { isTestScheduled, pk, sk } = await hasScheduledTest(now);
     if (isTestScheduled && pk && sk) {
       markTestAsRunning({ pk, sk, now });
-      return {
+      return JSON.stringify({
         isTestScheduled,
         time: now,
-      };
+      });
     }
   } catch (error) {
     console.error("error", error);
   }
-  return {
+  return JSON.stringify({
     isTestScheduled: false,
     time: now,
-  };
+  });
 };
 
 export { handler };
